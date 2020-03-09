@@ -59,14 +59,38 @@ def get_box_score_for_game(all_games, nba_team, today_date):
         return get_extended_game_summary(game_today_for_team, today_date)
 
 def get_next_game_for_team(nba_team):
-    return f"{nba_team.triCode} is not playing today"
+    schedule_response = requests.get(f"https://data.nba.net/10s/prod/v1/2019/teams/{nba_team.teamId}/schedule.json")
+    if schedule_response.status_code == 200:
+        schedules = schedule_response.json()
+        next_game_start_time = find_next_game_start_time(schedules)
+        next_game_opponent = find_next_game_opponent(schedules, nba_team)
+        next_game_start_localized_time = str(next_game_start_time.strftime("%a %b %d %I:%M %p"))
+        return f"{nba_team.triCode} is not playing today, their next game time is {next_game_start_localized_time} against {next_game_opponent.triCode}"
+    else:
+        return f"{nba_team.triCode} is not playing today"
+
+def find_next_game_start_time(schedules): 
+    last_game_played = schedules["league"]["lastStandardGamePlayedIndex"]
+    next_game = schedules["league"]["standard"][last_game_played + 1]
+    next_game_start_time = datetime.datetime.strptime(next_game["startTimeUTC"], "%Y-%m-%dT%H:%M:%S.%fz")
+    return next_game_start_time.replace(tzinfo=datetime.timezone.utc).astimezone(pytz.timezone('US/Pacific'))
+
+def find_next_game_opponent(schedules, nba_team):
+    last_game_played = schedules["league"]["lastStandardGamePlayedIndex"]
+    next_game = schedules["league"]["standard"][last_game_played + 1]
+    opponent_team_id = next_game["vTeam"]["teamId"] if nba_team != next_game["vTeam"]["teamId"] else next_game["hTeam"]["teamId"]
+    return lookup_by_team_id(opponent_team_id)
+
+def lookup_by_team_id(team_id):
+    team = next(team for team in teams.team_defs if team["teamId"] == team_id)
+    return NBATeam(team)
 
 def get_extended_game_summary(game, today_date):
     gameId = game["gameId"]
-    schedule_response = requests.get(f"https://data.nba.net/10s/prod/v1/{today_date}/{gameId}_boxscore.json")
+    boxscore_response = requests.get(f"https://data.nba.net/10s/prod/v1/{today_date}/{gameId}_boxscore.json")
 
-    if schedule_response.status_code == 200:
-        boxscore = get_simplified_boxscore(schedule_response.json())
+    if boxscore_response.status_code == 200:
+        boxscore = get_simplified_boxscore(boxscore_response.json())
         return get_simplified_game_summary(game) + boxscore
     else:
         return get_simplified_game_summary(game)
@@ -76,14 +100,13 @@ def get_simplified_boxscore(boxscore):
         return ""
     home_team_id = boxscore["basicGameData"]["hTeam"]["teamId"]
     home_tri_code = boxscore["basicGameData"]["hTeam"]["triCode"]
-    visitor_team_id = boxscore["basicGameData"]["vTeam"]["teamId"]
     visitor_tri_code = boxscore["basicGameData"]["vTeam"]["triCode"]
     
     scorers_for_home_team = []
     scorers_for_visiting_team = []
 
     players = boxscore["stats"]["activePlayers"]
-
+    
     for player in players:
         if (player["teamId"] == home_team_id):
             scorers_for_home_team.append(player)
