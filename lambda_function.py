@@ -160,7 +160,9 @@ def get_team(team):
         
 def lambda_handler(event, context):
     print("Received event: " + str(event))
-    body = event["Body"]
+    # sub + to whitespace
+    body = event["Body"].replace("+", " ")
+    body = body.replace("%20", " ")
     resp = MessagingResponse()
     resp.message("\n" + process_message(body))
 
