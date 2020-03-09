@@ -21,9 +21,9 @@ class NBATeam:
 def process_message(body):
     body = body.lower()
     if (body.startswith("score")):
-        return get_score(body[4:])
+        return get_score(body[6:])
     elif (body.startswith("scores")):
-        return get_score(body[5:])
+        return get_score(body[7:])
     else:
         return get_score(body)
 
@@ -32,7 +32,7 @@ def get_today_date():
     return str(today.strftime("%Y%m%d"))
 
 def get_score(team_str):
-    nba_team = get_team(team_str)
+    nba_team = get_team(team_str.strip())
     today_date = get_today_date()
    
     response = requests.get(f"https://data.nba.net/10s/prod/v1/{today_date}/scoreboard.json")
@@ -52,7 +52,76 @@ def get_scores_for_all_games(all_games):
         return "\n".join(map(str, display_strings))
 
 def get_box_score_for_game(all_games, nba_team, today_date):
-    print("not implemented yet")
+    game_today_for_team = get_game_for_team(all_games, nba_team)
+    if (game_today_for_team == None):
+        return get_next_game_for_team(nba_team)
+    else:
+        return get_extended_game_summary(game_today_for_team, today_date)
+
+def get_next_game_for_team(nba_team):
+    return f"{nba_team.triCode} is not playing today"
+
+def get_extended_game_summary(game, today_date):
+    gameId = game["gameId"]
+    schedule_response = requests.get(f"https://data.nba.net/10s/prod/v1/{today_date}/{gameId}_boxscore.json")
+
+    if schedule_response.status_code == 200:
+        boxscore = get_simplified_boxscore(schedule_response.json())
+        return get_simplified_game_summary(game) + boxscore
+    else:
+        return get_simplified_game_summary(game)
+
+def get_simplified_boxscore(boxscore):
+    if (not is_game_started(boxscore["basicGameData"])):
+        return ""
+    home_team_id = boxscore["basicGameData"]["hTeam"]["teamId"]
+    home_tri_code = boxscore["basicGameData"]["hTeam"]["triCode"]
+    visitor_team_id = boxscore["basicGameData"]["vTeam"]["teamId"]
+    visitor_tri_code = boxscore["basicGameData"]["vTeam"]["triCode"]
+    
+    scorers_for_home_team = []
+    scorers_for_visiting_team = []
+
+    players = boxscore["stats"]["activePlayers"]
+
+    for player in players:
+        if (player["teamId"] == home_team_id):
+            scorers_for_home_team.append(player)
+        else:
+            scorers_for_visiting_team.append(player)
+    
+    top_scorers_for_home_team = sorted(scorers_for_home_team, key = lambda scorer: get_int(scorer["points"]), reverse = True)[0:3]
+    top_scorers_for_visiting_team = sorted(scorers_for_visiting_team, key = lambda scorer: get_int(scorer["points"]), reverse = True)[0:3]
+
+    return f"\n{to_scorers_string(top_scorers_for_home_team, home_tri_code)}\n{to_scorers_string(top_scorers_for_visiting_team, visitor_tri_code)}"
+
+def to_scorers_string(scorers, team_tri_code):
+    displayString = f"Top scorers for {team_tri_code}:\n"
+    scorer_strings = map(lambda scorer: to_scorer_string(scorer), scorers)
+    return displayString + "\n".join(map(str, scorer_strings))
+    
+def to_scorer_string(scorer):
+    first_name = scorer["firstName"]
+    last_name = scorer["lastName"]
+    points = get_int(scorer["points"])
+    fgm = get_int(scorer["fgm"])
+    fga = get_int(scorer["fga"])
+    return f"{first_name} {last_name}: {points} pts - {fgm}/{fga} ({0 if int(fga) == 0 else round(fgm / fga, 2)} fg%)"
+
+def get_int(str_value):
+    return 0 if str_value == "" else int(str_value)
+
+def is_game_started(game):
+    return game["period"]["current"] != 0
+
+def is_higher_scorer(player1, player2):
+    return player1["points"] > player2["points"]
+
+def get_game_for_team(all_games, nba_team):
+    for game in all_games["games"]:
+        if (game["hTeam"]["triCode"] == nba_team.triCode or game["vTeam"]["triCode"] == nba_team.triCode):
+            return game
+    return None
 
 def get_simplified_game_summary(game): 
     home_team = game["hTeam"]["triCode"]
@@ -64,7 +133,7 @@ def get_simplified_game_summary(game):
     clock = str(game["clock"])
     start_time = game["startTimeEastern"]
 
-    if (current_period == 0):
+    if (not is_game_started(game)):
         period_display_str = f"Start time: {start_time}"
     else:
         if (clock == ""):
