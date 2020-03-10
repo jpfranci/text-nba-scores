@@ -55,13 +55,17 @@ def get_box_score_for_game(all_games, nba_team, today_date):
 
 def get_next_game_for_team(nba_team):
     schedule_response = requests.get(f"https://data.nba.net/10s/prod/v1/2019/teams/{nba_team.teamId}/schedule.json")
+    default_response =  f"{nba_team.triCode} is not playing today"
     if schedule_response.status_code == 200:
-        schedules = schedule_response.json()
-        next_game_start_time = find_next_game_start_time(schedules)
-        next_game_opponent = find_next_game_opponent(schedules, nba_team)
-        return f"{nba_team.triCode} is not playing today, their next game time is {next_game_start_time} against {next_game_opponent.triCode}"
+        try:
+            schedules = schedule_response.json()
+            next_game_start_time = find_next_game_start_time(schedules)
+            next_game_opponent = find_next_game_opponent(schedules, nba_team)
+            return f"{nba_team.triCode} is not playing today, their next game time is {next_game_start_time} against {next_game_opponent.triCode}"
+        except:
+            return default_response
     else:
-        return f"{nba_team.triCode} is not playing today"
+        return default_response
 
 def find_next_game_start_time(schedules): 
     last_game_played = schedules["league"]["lastStandardGamePlayedIndex"]
@@ -98,23 +102,23 @@ def get_simplified_boxscore(boxscore):
     home_tri_code = boxscore["basicGameData"]["hTeam"]["triCode"]
     visitor_tri_code = boxscore["basicGameData"]["vTeam"]["triCode"]
     
-    scorers_for_home_team = []
-    scorers_for_visiting_team = []
+    players_for_home_team = []
+    players_for_visiting_team = []
 
     players = boxscore["stats"]["activePlayers"]
     for player in players:
         if (player["teamId"] == home_team_id):
-            scorers_for_home_team.append(player)
+            players_for_home_team.append(player)
         else:
-            scorers_for_visiting_team.append(player)
+            players_for_visiting_team.append(player)
     
-    top_scorers_for_home_team = get_top_scorers(3, scorers_for_home_team)
-    top_scorers_for_visiting_team = get_top_scorers(3, scorers_for_visiting_team)
+    top_scorers_for_home_team = get_top_scorers(3, players_for_home_team)
+    top_scorers_for_visiting_team = get_top_scorers(3, players_for_visiting_team)
 
     return f"\n{to_scorers_string(top_scorers_for_home_team, home_tri_code)}\n{to_scorers_string(top_scorers_for_visiting_team, visitor_tri_code)}"
 
-def get_top_scorers(num_top_scorers, scorers):
-    return sorted(scorers, key = lambda scorer: get_int(scorer["points"]), reverse = True)[0:num_top_scorers]
+def get_top_scorers(num_top_scorers, players):
+    return sorted(players, key = lambda player: get_int(player["points"]), reverse = True)[0:num_top_scorers]
 
 def to_scorers_string(scorers, team_tri_code):
     displayString = f"Top scorers for {team_tri_code}:\n"
