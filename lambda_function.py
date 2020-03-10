@@ -1,9 +1,8 @@
 from twilio.twiml.messaging_response import Message, MessagingResponse
-import datetime
 import json
 import team_defs as teams
-import pytz
 import requests
+from time_util import format_clock, to_pacific_date_time, get_today_date
 
 class NBATeam:
     def __init__(self, team_def):
@@ -26,10 +25,6 @@ def process_message(body):
         return get_score(body[7:])
     else:
         return get_score(body)
-
-def get_today_date():
-    today = datetime.datetime.now(pytz.timezone('US/Pacific'))
-    return str(today.strftime("%Y%m%d"))
 
 def get_score(team_str):
     nba_team = get_team(team_str.strip())
@@ -64,21 +59,22 @@ def get_next_game_for_team(nba_team):
         schedules = schedule_response.json()
         next_game_start_time = find_next_game_start_time(schedules)
         next_game_opponent = find_next_game_opponent(schedules, nba_team)
-        next_game_start_localized_time = str(next_game_start_time.strftime("%a %b %d %I:%M %p"))
-        return f"{nba_team.triCode} is not playing today, their next game time is {next_game_start_localized_time} against {next_game_opponent.triCode}"
+        return f"{nba_team.triCode} is not playing today, their next game time is {next_game_start_time} against {next_game_opponent.triCode}"
     else:
         return f"{nba_team.triCode} is not playing today"
 
 def find_next_game_start_time(schedules): 
     last_game_played = schedules["league"]["lastStandardGamePlayedIndex"]
     next_game = schedules["league"]["standard"][last_game_played + 1]
-    next_game_start_time = datetime.datetime.strptime(next_game["startTimeUTC"], "%Y-%m-%dT%H:%M:%S.%fz")
-    return next_game_start_time.replace(tzinfo=datetime.timezone.utc).astimezone(pytz.timezone('US/Pacific'))
+    return to_pacific_date_time(next_game["startTimeUTC"])
 
 def find_next_game_opponent(schedules, nba_team):
     last_game_played = schedules["league"]["lastStandardGamePlayedIndex"]
     next_game = schedules["league"]["standard"][last_game_played + 1]
-    opponent_team_id = next_game["vTeam"]["teamId"] if nba_team != next_game["vTeam"]["teamId"] else next_game["hTeam"]["teamId"]
+    if (nba_team.teamId != next_game["vTeam"]["teamId"]):
+        opponent_team_id = next_game["vTeam"]["teamId"]
+    else:
+        opponent_team_id = next_game["hTeam"]["teamId"]
     return lookup_by_team_id(opponent_team_id)
 
 def lookup_by_team_id(team_id):
@@ -96,7 +92,7 @@ def get_extended_game_summary(game, today_date):
         return get_simplified_game_summary(game)
 
 def get_simplified_boxscore(boxscore):
-    if (not is_game_started(boxscore["basicGameData"])):
+    if (is_game_not_started(boxscore["basicGameData"])):
         return ""
     home_team_id = boxscore["basicGameData"]["hTeam"]["teamId"]
     home_tri_code = boxscore["basicGameData"]["hTeam"]["triCode"]
@@ -106,17 +102,19 @@ def get_simplified_boxscore(boxscore):
     scorers_for_visiting_team = []
 
     players = boxscore["stats"]["activePlayers"]
-    
     for player in players:
         if (player["teamId"] == home_team_id):
             scorers_for_home_team.append(player)
         else:
             scorers_for_visiting_team.append(player)
     
-    top_scorers_for_home_team = sorted(scorers_for_home_team, key = lambda scorer: get_int(scorer["points"]), reverse = True)[0:3]
-    top_scorers_for_visiting_team = sorted(scorers_for_visiting_team, key = lambda scorer: get_int(scorer["points"]), reverse = True)[0:3]
+    top_scorers_for_home_team = get_top_scorers(3, scorers_for_home_team)
+    top_scorers_for_visiting_team = get_top_scorers(3, scorers_for_visiting_team)
 
     return f"\n{to_scorers_string(top_scorers_for_home_team, home_tri_code)}\n{to_scorers_string(top_scorers_for_visiting_team, visitor_tri_code)}"
+
+def get_top_scorers(num_top_scorers, scorers):
+    return sorted(scorers, key = lambda scorer: get_int(scorer["points"]), reverse = True)[0:num_top_scorers]
 
 def to_scorers_string(scorers, team_tri_code):
     displayString = f"Top scorers for {team_tri_code}:\n"
@@ -134,8 +132,14 @@ def to_scorer_string(scorer):
 def get_int(str_value):
     return 0 if str_value == "" else int(str_value)
 
-def is_game_started(game):
-    return game["period"]["current"] != 0
+def is_game_not_started(game):
+    return game["statusNum"] == 1
+
+def is_game_ongoing(game):
+    return game["statusNum"] == 2
+
+def is_game_ended(game):
+    return game["statusNum"] == 3
 
 def is_higher_scorer(player1, player2):
     return player1["points"] > player2["points"]
@@ -153,22 +157,21 @@ def get_simplified_game_summary(game):
     visitor_score = 0 if game["vTeam"]["score"] == "" else game["vTeam"]["score"]
 
     current_period = game["period"]["current"]
-    clock = str(game["clock"])
-    start_time = game["startTimeEastern"]
-
-    if (not is_game_started(game)):
-        period_display_str = f"Start time: {start_time}"
-    else:
-        if (clock == ""):
-            period_display_str = "Final"
-        else:
-            if (current_period <= 4):
-                period_display_str =  f"Quarter {str(current_period)} {clock}"
-            else:
-                period_display_str = f"OT{str(current_period - 4)} {clock}"
+    clock = format_clock(game["clock"])
+    start_time = to_pacific_date_time(game["startTimeUTC"])
     
-    return f"{visitor_team} ({visitor_score}) vs {home_team} ({home_score}) {period_display_str}"
-        
+    if (is_game_not_started(game)):
+        period_display_str = f"Start time: {start_time}"
+    elif (is_game_ongoing(game)):
+        if (current_period <= 4):
+            period_display_str =  f"Quarter {str(current_period)} {clock}"
+        else:
+            period_display_str = f"OT{str(current_period - 4)} {clock}"
+    else:
+         period_display_str = "Final"
+
+    return f"{visitor_team} ({visitor_score} pts) vs {home_team} ({home_score} pts) {period_display_str}"
+
 def get_team(team):
     for team_def in teams.team_defs:
         if (team == team_def["city"].lower() or 
